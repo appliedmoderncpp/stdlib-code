@@ -11,14 +11,16 @@
 #ifndef AMCPP_EMPLOYEE_HPP
 #define AMCPP_EMPLOYEE_HPP
 
-#include <experimental/ranges/utility>
+#include "byte_cast.hpp"
+#include "io.hpp"
+#include <iomanip>
+#include <iostream>
 #include <ios>
 #include <iosfwd>
 #include <string>
 #include <string_view>
 
 namespace amcpp {
-   namespace ranges = std::experimental::ranges;
 
    class Employee {
    public:
@@ -26,20 +28,23 @@ namespace amcpp {
 
       Employee(const int id, std::string surname, std::string first_name, const double salary)
          : id_{id},
-           surname_{ranges::move(surname)},
-           first_name_{ranges::move(first_name)},
+           surname_{std::move(surname)},
+           first_name_{std::move(first_name)},
            salary_{salary}
       {}
 
-      Employee(const int id, const std::string_view surname, const std::string_view first_name,
-         const double salary)
-         : id_{id},
-           surname_{surname.data()},
-           first_name_{first_name.data()},
-           salary_{salary}
-      {}
-
-      Employee(std::istream&, std::ios_base::openmode = std::ios_base::in);
+      Employee(std::istream& in, std::ios_base::openmode open = std::ios_base::in)
+      {
+         if (auto s = std::istream::sentry{in}) {
+            if (open & std::ios_base::binary)
+               read_binary(in);
+            else
+               read_text(in);
+         }
+         else {
+            throw std::ios_base::failure{"Unable to reset istream object"};
+         }
+      }
 
       int id() const noexcept
       {
@@ -71,13 +76,71 @@ namespace amcpp {
          throw std::ios_base::failure{"Unable to " + mode + ' ' + member};
       }
 
-      void read_binary(std::istream&);
-      void read_text(std::istream&);
+      void read_binary(std::istream& in)
+      {
+         if (!in.read(byte_cast(id_), sizeof(id_)))
+            io_failure("id");
+         if (!io::read(in, surname_))
+            io_failure("surname");
+         if (!io::read(in, first_name_))
+            io_failure("first name");
+         if (!in.read(byte_cast(salary_), sizeof(salary_)))
+            io_failure("salary");
+      }
+
+      void read_text(std::istream& in)
+      {
+         if (auto c = '0'; !(in.get(c) && c == '{'))
+            io_failure("{");
+         if (!(in >> id_))
+            io_failure("id");
+         if (auto c = '0'; !(in.get(c) && c == ','))
+            io_failure(",");
+         if (!getline(in, surname_, ','))
+            io_failure("surname");
+         if (!getline(in, first_name_, ','))
+            io_failure("first name");
+         if (!(in >> salary_)) {
+            std::cerr << surname_ << ' ' << first_name_ << '\n';
+            io_failure("salary");
+         }
+         if (auto c = '0'; !(in.get(c) && c == '}'))
+            io_failure("}");
+      }
    };
 
-   std::ostream& write(std::ostream&, const Employee&);
-   std::ostream& operator<<(std::ostream&, const Employee&);
-   std::istream& operator>>(std::istream&, Employee&);
+   std::ostream& write(std::ostream& o, const Employee& e)
+   {
+      if (auto s = std::ostream::sentry{o}) {
+         o.write(byte_cast(e.id()), sizeof(e.id()));
+         io::write(o, e.surname());
+         io::write(o, e.first_name());
+         o.write(byte_cast(e.salary()), sizeof(e.salary()));
+      }
+
+      return o;
+   }
+
+   std::ostream& operator<<(std::ostream& o, const Employee& e)
+   {
+      using namespace std;
+      if (auto s = ostream::sentry{o}) {
+         auto f = o.flags();
+         auto p = o.precision();
+         o << '{' << e.id() << ',' << e.surname() << ',' << e.first_name() << ','
+            << std::fixed << std::setprecision(2) << e.salary() << std::setprecision(p);
+         o.flags(f);
+         o << '}';
+      }
+
+      return o;
+   }
+
+   std::istream& operator>>(std::istream& in, Employee& e)
+   {
+      e = {in};
+      return in;
+   }
 } // namespace amcpp
 
 #endif // AMCPP_EMPLOYEE_HPP
